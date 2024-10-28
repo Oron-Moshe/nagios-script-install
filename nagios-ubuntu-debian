@@ -1,0 +1,162 @@
+#!/bin/bash
+
+nscafile=/etc/nagios/nsca
+
+#1. Checking if your os is compatible to this monitor script installer
+check_machine_os() {
+release_file=/etc/os-release
+if grep -q "Ubuntu" $release_file || grep -q "Debian" $release_file
+then
+	echo "Your system is compatible for this monitoring"
+else
+	echo "Your system is not compatible for this monitoring"
+	exit 0
+fi
+}
+
+#2. Checking if NSCA already installed on the system
+check_if_monitoring() {
+echo "OMC UBUNTU/DEBIAN MONITORING INSTALLER SCRIPT"
+
+if [ -f $nscafile ]
+then
+	echo "- - - -Alert - - - -"
+	echo "$nscafile found on the system!"
+else
+	echo "$nscafile is not found and ready to installed on the system!"
+fi
+}
+
+#3. Checking if you wish to continue the installation
+check_continue() {
+while true; 
+do
+    read -p "If you wish to continue, enter 'yes', or 'no' to exit: " input
+
+    input=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+
+    case $input in
+        yes)
+            echo "You chose to continue."
+            break
+            ;;
+        no)
+            echo "You chose to exit."
+            exit 0
+            ;;
+        *)
+            echo "Invalid input. Please enter 'yes' or 'no'."
+            ;;
+    esac
+done
+}
+
+#4. Installing the monitoring package
+package_installer() {
+apt-get install -y wget
+apt-get install -y libmcrypt-dev
+apt-get install -y monitoring-plugins
+mkdir /etc/nagios
+cd /etc/nagios
+wget -t 2 --connect-timeout=3 ftp://ftpUSER:PASSWORD@X.X.X.X/nsca.tgz
+tar -xzf nsca.tgz
+cp /usr/lib/nagios/plugins/* /etc/nagios/plugins
+}
+
+#5. Host name template
+host_template() {
+echo ""
+echo "HOST NAME TEMPLATE"
+echo "*customer number*_*datacenter location*_”machine type”_”server name” all in lowercase!"
+echo "example:"
+echo "10000_il-rh_vm_Oron.Ubuntu"
+echo "--------------------------"
+}
+
+#6. Changing the nscaConfig file host and adding bin/bash to nsca file
+change_hostname() {
+read -p "Enter the NSCA hostname: " nscahostname
+sed -i "1s|^host=.*|host=$nscahostname|" /etc/nagios/nscaConfig
+echo "Updated /etc/nagios/nscaConfig with host=$nscahostname"
+sed -i '1s|.*|#!/bin/bash|' /etc/nagios/nsca
+}
+
+#7. Check if a swap file exists, and installing it
+check_swapfile() {
+if swapon --show | grep -q 'file';
+then
+    echo "Swap file is already available on the system."
+else
+    echo "No swap file detected on the system."
+
+    ram_capacity=$(free -h | awk '/Mem:/ {print $2}')
+    echo "RAM Capacity: $ram_capacity"
+    disk_capacity=$(df -h / | awk 'NR==2 {print $2}')
+    disk_used=$(df -h / | awk 'NR==2 {print $3}')
+    echo "Disk Capacity: $disk_capacity"
+    echo "Disk Used: $disk_used"
+
+    while true; do
+        read -rp "Do you want to install a swap file? (yes/no): " answer
+        case "${answer,,}" in
+            yes)
+                echo "Swapfile size recommended: 1/2 or 1/3 of RAM capacity and enough disk space."
+                
+                read -p "Choose a swapfile size in megabytes (e.g., 1024 for 1 GB): " size
+
+                if ! [[ "$size" =~ ^[0-9]+$ ]]; then
+                    echo "Invalid size. Please enter a numeric value."
+                    continue
+                fi
+
+                mkdir -p /swap
+                cd /swap || exit
+                touch swapfile
+                dd if=/dev/zero of=/swap/swapfile bs=1M count="$size"
+                chmod 600 /swap/swapfile
+                mkswap /swap/swapfile
+                swapon /swap/swapfile
+
+                echo "Swap file of ${size}MB has been created and enabled."
+                break
+                ;;
+            no)
+                echo "Swap file installation canceled."
+                break
+                ;;
+            *)
+                echo "Invalid response. Please enter 'yes' or 'no'."
+                ;;
+        esac
+    done
+fi
+}
+
+#8. Checking if cronjob is exist, if not, install cronjob
+check_cronjob() {
+cron_job="*/5 * * * * /etc/nagios/nsca > /dev/null 2>&1"
+
+if crontab -l | grep -Fxq "$cron_job"; then
+    echo "The cron job is already installed on the system."
+else
+    echo "Cron job not found. Installing cron job..."
+    # Add the cron job to the last line of the crontab
+    (crontab -l; echo "$cron_job") | crontab -
+    echo "Cron job added to crontab."
+fi
+}
+
+main() {
+	check_machine_os
+	check_if_monitoring
+	check_continue
+	package_installer
+	host_template
+	change_hostname
+	check_swapfile
+	check_cronjob
+	find /etc/nagios/ -type d -exec chmod +x {} \; -o -type f -exec chmod +x {} \;
+	/etc/nagios/nsca
+}
+
+main
